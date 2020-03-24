@@ -3,5 +3,6 @@ members = [
 	"0_gcd",
 	"1_iron-gcd",
 	"2_mandelbrot",
-	"3_generic-queue"
+	"3_generic-queue",
+	"4_complex"
 ]
