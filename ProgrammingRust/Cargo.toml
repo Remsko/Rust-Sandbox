@@ -4,5 +4,7 @@ members = [
 	"1_iron-gcd",
 	"2_mandelbrot",
 	"3_generic-queue",
-	"4_complex"
+	"4_complex",
+	"5_basic-router",
+	"6_binary-tree"
 ]
