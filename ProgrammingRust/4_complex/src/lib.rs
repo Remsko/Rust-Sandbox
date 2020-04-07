@@ -174,3 +174,47 @@ fn comparison() {
 	let y = Complex { re: 2, im: 5 };
 	assert_eq!(x * y, Complex { re: 0, im: 29 });
 }
+
+use std::fmt;
+
+#[cfg(skip)]
+impl fmt::Display for Complex<f64> {
+	fn fmt(&self, dest: &mut fmt::Formatter) -> fmt::Result {
+		let i_sign = if self.i < 0.0 { '-' } else { '+' };
+		write!(dest, "{} {} {}i", self.r, i_sign, f64::abs(self.i))
+	}
+}
+
+impl fmt::Display for Complex<f64> {
+	fn fmt(&self, dest: &mut fmt::Formatter) -> fmt::Result {
+		let (r, i) = (self.re, self.im);
+		if dest.alternate() {
+			let abs = f64::sqrt(r * r + i * i);
+			let angle = f64::atan2(i, r) / std::f64::consts::PI * 180.0;
+			write!(dest, "{} ∠ {}°", abs, angle)
+		} else {
+			let i_sign = if i < 0.0 { '-' } else { '+' };
+			write!(dest, "{} {} {}i", r, i_sign, f64::abs(i))
+		}
+	}
+}
+
+#[test]
+fn custom_display_impl() {
+	let one_twenty = Complex {
+		re: -0.5,
+		im: 0.866,
+	};
+	assert_eq!(format!("{}", one_twenty), "-0.5 + 0.866i");
+
+	let two_forty = Complex {
+		re: -0.5,
+		im: -0.866,
+	};
+	assert_eq!(format!("{}", two_forty), "-0.5 - 0.866i");
+
+	let ninety = Complex { re: 0.0, im: 2.0 };
+	assert_eq!(format!("{}", ninety), "0 + 2i");
+
+	assert_eq!(format!("{:#}", ninety), "2 ∠ 90°");
+}

@@ -6,5 +6,6 @@ members = [
 	"3_generic-queue",
 	"4_complex",
 	"5_basic-router",
-	"6_binary-tree"
+	"6_binary-tree",
+	"7_grep",
 ]
