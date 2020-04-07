@@ -8,5 +8,7 @@ members = [
 	"5_basic-router",
 	"6_binary-tree",
 	"7_grep",
-	"8_copy"
+	"8_copy",
+	"9_echo-server",
+	"10_http-get"
 ]
