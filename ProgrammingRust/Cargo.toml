@@ -10,5 +10,6 @@ members = [
 	"7_grep",
 	"8_copy",
 	"9_echo-server",
-	"10_http-get"
+	"10_http-get",
+	"11_json-macro",
 ]
