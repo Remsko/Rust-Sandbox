@@ -9,6 +9,7 @@ pub struct Connection {
 	state: State,
 	send: SendSequenceSpace,
 	recv: RecvSequenceSpace,
+	ip: etherparse::Ipv4Header,
 }
 
 struct SendSequenceSpace {
@@ -71,6 +72,23 @@ impl Connection {
 				irs: tcph.sequence_number(),
 				up: false,
 			},
+			ip: etherparse::Ipv4Header::new(
+				0,
+				64,
+				etherparse::IpTrafficClass::Tcp,
+				[
+					iph.destination()[0],
+					iph.destination()[1],
+					iph.destination()[2],
+					iph.destination()[3],
+				],
+				[
+					iph.source()[0],
+					iph.source()[1],
+					iph.source()[2],
+					iph.source()[3],
+				],
+			),
 		};
 
 		// need to start establishing a connection
@@ -83,33 +101,16 @@ impl Connection {
 		syn_ack.acknowledgment_number = c.recv.nxt;
 		syn_ack.syn = true;
 		syn_ack.ack = true;
-
-		let ip = etherparse::Ipv4Header::new(
-			syn_ack.header_len(),
-			64,
-			etherparse::IpTrafficClass::Tcp,
-			[
-				iph.destination()[0],
-				iph.destination()[1],
-				iph.destination()[2],
-				iph.destination()[3],
-			],
-			[
-				iph.source()[0],
-				iph.source()[1],
-				iph.source()[2],
-				iph.source()[3],
-			],
-		);
+		c.ip.set_payload_len(syn_ack.header_len() as usize + 0);
 		// kernel does it
 		// syn_ack.checksum = syn_ack
-		// 	.calc_checksum_ipv4(&ip, &[])
+		// 	.calc_checksum_ipv4(&c.ip, &[])
 		// 	.expect("failed to compute checksum");
 
 		// write out the headers
 		let unwritten = {
 			let mut unwritten = &mut buf[..];
-			ip.write(&mut unwritten);
+			c.ip.write(&mut unwritten);
 			syn_ack.write(&mut unwritten);
 			unwritten.len()
 		};
@@ -124,14 +125,46 @@ impl Connection {
 		tcph: etherparse::TcpHeaderSlice<'a>,
 		data: &'a [u8],
 	) -> io::Result<()> {
+		// SND.UNA < SEG.ACK =< SND.NXT
+		let ackn = tcph.acknowledgment_number();
+		if self.send.una < ackn {
+			if self.send.nxt >= self.send.una && self.send.nxt < ackn {
+				return Ok(());
+			}
+		} else {
+			if self.send.nxt >= ackn && self.send.nxt < self.send.una {
+			} else {
+				return Ok(());
+			}
+		}
+		// RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
 		match self.state {
 			State::SynRcvd => {
-				//
+				// expect to get an ACK for our SYN
 			}
 			State::Estab => {
 				unimplemented!();
 			}
 		};
 		Ok(())
+	}
+
+	fn is_between_wrapped(start: usize, x: usize, end: usize) -> bool {
+		use std::cmp::Ordering;
+		match start.cmp(x) {
+			Ordering::Equal => return false,
+			Ordering::Less => {
+				if end >= start && end < x {
+					return false;
+				}
+			}
+			Ordering::Greater => {
+				if end > x && end < start {
+				} else {
+					return false;
+				}
+			}
+		}
+		true
 	}
 }

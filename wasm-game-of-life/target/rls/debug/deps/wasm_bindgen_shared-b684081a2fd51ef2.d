@@ -1,7 +1,0 @@
-/home/rpinoit/Desktop/Workspace/Rust-Sandbox/wasm-game-of-life/target/rls/debug/deps/wasm_bindgen_shared-b684081a2fd51ef2.rmeta: /home/rpinoit/.cargo/registry/src/github.com-1ecc6299db9ec823/wasm-bindgen-shared-0.2.60/src/lib.rs
-
-/home/rpinoit/Desktop/Workspace/Rust-Sandbox/wasm-game-of-life/target/rls/debug/deps/libwasm_bindgen_shared-b684081a2fd51ef2.rlib: /home/rpinoit/.cargo/registry/src/github.com-1ecc6299db9ec823/wasm-bindgen-shared-0.2.60/src/lib.rs
-
-/home/rpinoit/Desktop/Workspace/Rust-Sandbox/wasm-game-of-life/target/rls/debug/deps/wasm_bindgen_shared-b684081a2fd51ef2.d: /home/rpinoit/.cargo/registry/src/github.com-1ecc6299db9ec823/wasm-bindgen-shared-0.2.60/src/lib.rs
-
-/home/rpinoit/.cargo/registry/src/github.com-1ecc6299db9ec823/wasm-bindgen-shared-0.2.60/src/lib.rs:
