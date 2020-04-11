@@ -3,6 +3,18 @@ use std::io;
 enum State {
 	SynRcvd,
 	Estab,
+	FinWait1,
+	FinWait2,
+	Closing,
+}
+
+impl State {
+	fn is_synchronized(&self) -> bool {
+		match *self {
+			State::SynRcvd => false,
+			State::Estab | State::FinWait1 | State::FinWait2 | State::Closing => true,
+		}
+	}
 }
 
 pub struct Connection {
@@ -10,6 +22,7 @@ pub struct Connection {
 	send: SendSequenceSpace,
 	recv: RecvSequenceSpace,
 	ip: etherparse::Ipv4Header,
+	tcp: etherparse::TcpHeader,
 }
 
 struct SendSequenceSpace {
@@ -54,13 +67,14 @@ impl Connection {
 		}
 
 		let iss = 0;
+		let wnd = 10;
 		let mut c = Connection {
 			state: State::SynRcvd,
 			send: SendSequenceSpace {
 				iss: iss,
 				una: iss,
-				nxt: iss + 1,
-				wnd: 10,
+				nxt: iss,
+				wnd: wnd,
 				up: false,
 
 				wl1: 0,
@@ -72,6 +86,7 @@ impl Connection {
 				irs: tcph.sequence_number(),
 				up: false,
 			},
+			tcp: etherparse::TcpHeader::new(tcph.destination_port(), tcph.source_port(), iss, wnd),
 			ip: etherparse::Ipv4Header::new(
 				0,
 				64,
@@ -91,31 +106,47 @@ impl Connection {
 			),
 		};
 
-		// need to start establishing a connection
-		let mut syn_ack = etherparse::TcpHeader::new(
-			tcph.destination_port(),
-			tcph.source_port(),
-			c.send.iss,
-			c.send.wnd,
-		);
-		syn_ack.acknowledgment_number = c.recv.nxt;
-		syn_ack.syn = true;
-		syn_ack.ack = true;
-		c.ip.set_payload_len(syn_ack.header_len() as usize + 0);
-		// kernel does it
-		// syn_ack.checksum = syn_ack
-		// 	.calc_checksum_ipv4(&c.ip, &[])
-		// 	.expect("failed to compute checksum");
-
-		// write out the headers
-		let unwritten = {
-			let mut unwritten = &mut buf[..];
-			c.ip.write(&mut unwritten);
-			syn_ack.write(&mut unwritten);
-			unwritten.len()
-		};
-		nic.send(&buf[..buf.len() - unwritten])?;
+		c.tcp.syn = true;
+		c.tcp.ack = true;
+		c.write(nic, &[])?;
 		Ok(Some(c))
+	}
+
+	pub fn write<'a>(&mut self, nic: &mut tun_tap::Iface, payload: &[u8]) -> io::Result<usize> {
+		use std::io::Write;
+		let mut buf = [0u8; 1500];
+		self.tcp.sequence_number = self.send.nxt;
+		self.tcp.acknowledgment_number = self.recv.nxt;
+
+		let size = std::cmp::min(
+			buf.len(),
+			self.tcp.header_len() as usize + self.ip.header_len() as usize + payload.len(),
+		);
+		self.ip.set_payload_len(size);
+		let mut unwritten = &mut buf[..];
+		self.ip.write(&mut unwritten);
+		self.tcp.write(&mut unwritten);
+		let payload_bytes = unwritten.write(payload)?;
+		let unwritten = unwritten.len();
+		self.send.nxt = self.send.nxt.wrapping_add(payload_bytes as u32);
+		if self.tcp.syn {
+			self.send.nxt = self.send.nxt.wrapping_add(1);
+			self.tcp.syn = false;
+		}
+		if self.tcp.fin {
+			self.send.nxt = self.send.nxt.wrapping_add(1);
+			self.tcp.fin = false;
+		}
+		nic.send(&buf[..buf.len() - unwritten])?;
+		Ok(payload_bytes)
+	}
+
+	pub fn send_rst(&mut self, nic: &mut tun_tap::Iface) -> io::Result<()> {
+		self.tcp.rst = true;
+		self.tcp.sequence_number = 0;
+		self.tcp.acknowledgment_number = 0;
+		self.write(nic, &[])?;
+		Ok(())
 	}
 
 	pub fn on_packet<'a>(
@@ -127,44 +158,100 @@ impl Connection {
 	) -> io::Result<()> {
 		// SND.UNA < SEG.ACK =< SND.NXT
 		let ackn = tcph.acknowledgment_number();
-		if self.send.una < ackn {
-			if self.send.nxt >= self.send.una && self.send.nxt < ackn {
+		if !is_between_wrapped(self.send.una, ackn, self.send.nxt.wrapping_add(1)) {
+			if !self.state.is_synchronized() {
+				self.send_rst(nic);
+			}
+			return Ok(());
+		}
+		self.send.una = ackn;
+		// RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
+		let seqn = tcph.sequence_number();
+		let mut slen = data.len() as u32;
+		if tcph.fin() {
+			slen += 1;
+		}
+		if tcph.syn() {
+			slen += 1;
+		}
+		let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
+		if slen == 0 {
+			if self.recv.wnd == 0 {
+				if seqn != self.recv.nxt {
+					return Ok(());
+				}
+			} else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1), seqn, wend) {
 				return Ok(());
 			}
 		} else {
-			if self.send.nxt >= ackn && self.send.nxt < self.send.una {
-			} else {
+			if self.recv.wnd == 0 {
+				return Ok(());
+			} else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1), seqn, wend)
+				&& !is_between_wrapped(
+					self.recv.nxt.wrapping_sub(1),
+					seqn.wrapping_add(slen - 1),
+					wend,
+				) {
 				return Ok(());
 			}
 		}
-		// RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
+		self.recv.nxt = seqn.wrapping_add(slen);
+
 		match self.state {
 			State::SynRcvd => {
 				// expect to get an ACK for our SYN
+				if !tcph.ack() {
+					return Ok(());
+				}
+				self.state = State::Estab;
+				self.tcp.fin = true;
+				self.write(nic, &[])?;
+				self.state = State::FinWait1;
 			}
 			State::Estab => {
 				unimplemented!();
 			}
+			State::FinWait1 => {
+				if !tcph.fin() || !data.is_empty() {
+					unimplemented!();
+				}
+				self.state = State::FinWait2;
+			}
+			State::FinWait2 => {
+				if !tcph.fin() || !data.is_empty() {
+					unimplemented!();
+				}
+				self.state = State::FinWait2;
+			}
+			State::Closing => {
+				if !tcph.fin() || !data.is_empty() {
+					unimplemented!();
+				}
+
+				self.tcp.fin = false;
+				self.write(nic, &[])?;
+				self.state = State::Closing;
+			}
 		};
 		Ok(())
 	}
+}
 
-	fn is_between_wrapped(start: usize, x: usize, end: usize) -> bool {
-		use std::cmp::Ordering;
-		match start.cmp(x) {
-			Ordering::Equal => return false,
-			Ordering::Less => {
-				if end >= start && end < x {
-					return false;
-				}
-			}
-			Ordering::Greater => {
-				if end > x && end < start {
-				} else {
-					return false;
-				}
+fn is_between_wrapped(start: u32, x: u32, end: u32) -> bool {
+	use std::cmp::Ordering;
+	match start.cmp(&x) {
+		Ordering::Equal => return false,
+		Ordering::Less => {
+			if end >= start && end <= x {
+				return false;
 			}
 		}
-		true
+		Ordering::Greater => {
+			if end > x && end < start {
+			} else {
+				return false;
+			}
+		}
 	}
+	true
 }
